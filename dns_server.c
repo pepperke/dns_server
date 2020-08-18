@@ -1,20 +1,58 @@
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
+#include <sys/select.h>
 #include <sys/socket.h>
-#include <sys/types.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <sys/types.h>
 #include <netdb.h>
 #include <errno.h>
+#include <stdio.h>
+#include <unistd.h>
+#include <stdlib.h>
+#include <string.h>
+#include <signal.h>
 
 #include "dns_server.h"
 #include "dns_hosts.h"
-#include "hashtable.c"
+#include "hash_table.h"
 
-int main() {
-    hashtable_t *ht = ht_create(1000);
+// Global variables to be able to clear them correctly 
+// after receiving Ctrl-C
+HashTable *ht;
+int server_socket;
 
+/* Handler function to catch signal */
+void sigint_handler(int s) {
+    printf("\nExiting...\n");
+    free_hashtable(ht);
+    close(server_socket);
+    exit(0);
+}
+
+int main(int argc, char *argv[]) {
+    // Create hast table to store hosts
+    ht = create_table(1023);
+
+    if (argc > 1) {
+        if (argc != 2) {
+            printf("Too many arguments. Usage ./dns_server [filename]\n");
+            exit(1);
+        }
+        read_hosts(ht, argv[1]);
+    }
+    else {
+        read_hosts(ht, "hosts"); // No arguments given
+    }
+
+    // Define handler to catch Ctrl-C
+    struct sigaction sigIntHandler;
+
+    sigIntHandler.sa_handler = sigint_handler;
+    sigemptyset(&sigIntHandler.sa_mask);
+    sigIntHandler.sa_flags = 0;
+    sigaction(SIGINT, &sigIntHandler, NULL);
+
+
+    // Create UDP server on port 10053
     struct addrinfo *bind_addr, hints;
     memset(&hints, 0, sizeof(struct addrinfo));
 
@@ -26,11 +64,11 @@ int main() {
         exit(1);
     }
 
-    int server_socket = socket(bind_addr->ai_family, bind_addr->ai_socktype, 
+    server_socket = socket(bind_addr->ai_family, bind_addr->ai_socktype, 
                 bind_addr->ai_protocol);
     
     if (server_socket < 0) {
-        perror("Failed to create server socket");
+        perror("Failed to create server socket");       
         exit(1);
     }
 
@@ -42,12 +80,30 @@ int main() {
 
     printf("Server is started, waiting for connections\n");
 
-    struct dns_packet dns_packet;
+    char command[30];       // Buffer for user commands
 
-    unsigned char query_buff[512];
+    struct timeval timeout;
+    timeout.tv_sec = 0;
+    timeout.tv_usec = 100 * 1000; // 100 ms
 
-    // int bytes_written = write_packet(query_buff, &dns_packet);
-    // printf("%d\n", bytes_written);
+    fd_set reads;
+
+    while (1) {
+        FD_ZERO(&reads);
+        FD_SET(server_socket, &reads);
+        FD_SET(0, &reads);
+        if (select(server_socket+1, &reads, 0, 0, &timeout) < 0) {
+            perror("Error");
+            exit(1);
+        }
+        if (FD_ISSET(server_socket, &reads)) {
+            process_query();
+        }
+        if (FD_ISSET(0, &reads)) { // Got query on port
+            fgets(command, sizeof(command), stdin);
+            process_user_command(command);
+        }
+    }
 
     return 0;
 }
@@ -57,7 +113,7 @@ void read_ipv4(const unsigned char packet_ptr[], unsigned char *address) {
             packet_ptr[2], packet_ptr[3]);
 }
 
-const char * read_domain(const char packet_ptr[], const char packet_start[], char domain[]) {
+const char * read_qname(const char packet_ptr[], const char packet_start[], char domain[]) {
     const char *msg_ptr = packet_ptr;
     const char *saved_ptr = packet_ptr;
     char len;
@@ -105,15 +161,6 @@ const char * read_header(const char packet[], struct dns_header *header) {
     header->z  = (*packet_ptr & 0x07) >> 4;
     if (header->qr) {
         header->rcode = (*packet_ptr & 0x0F);
-        switch (header->rcode) {
-            case 0: printf("RCODE: success\n"); break;
-            case 1: printf("RCODE: format error\n"); break;
-            case 2: printf("RCODE: server failure\n"); break;
-            case 3: printf("RCODE: name error\n"); break;
-            case 4: printf("RCODE: not implemented\n"); break;
-            case 5: printf("RCODE: refused\n"); break;
-            default: printf("RCODE: ?\n"); break;
-        }
     }
     packet_ptr++;
 
@@ -129,7 +176,7 @@ const char * read_questions(const char packet_ptr[], const char packet_start[],
     int rtype, rclass;
 
     for (int i = 0; i < qdcount; i++) {
-        packet_ptr = read_domain(packet_ptr, packet_start, questions->domain);
+        packet_ptr = read_qname(packet_ptr, packet_start, questions->domain);
 
         rtype = (packet_ptr[0] << 8) | packet_ptr[1];
         switch (rtype) {
@@ -159,7 +206,7 @@ const char * read_records(const char packet_ptr[], const char packet_start[],
     int rtype, rclass;
 
     for (int i = 0; i < rcount; i++) {
-        packet_ptr = read_domain(packet_ptr, packet_start, records->domain);
+        packet_ptr = read_qname(packet_ptr, packet_start, records->domain);
 
         rtype = (packet_ptr[0] << 8) | packet_ptr[1];
         switch (rtype) {
@@ -203,28 +250,29 @@ const char * read_records(const char packet_ptr[], const char packet_start[],
 void read_packet(const char packet[], struct dns_packet *dns_packet) {
     const char *packet_ptr = packet;
 
+    dns_packet->questions = malloc(sizeof(struct resource_record));
+    dns_packet->answers = malloc(sizeof(struct resource_record));
+    dns_packet->authorities = malloc(sizeof(struct resource_record));
+    dns_packet->additional = malloc(sizeof(struct resource_record));
+
     packet_ptr = read_header(packet_ptr, &(dns_packet->header));
 
     if (dns_packet->header.qdcount) {
-        dns_packet->questions = malloc(sizeof(struct resource_record));
         packet_ptr = read_questions(packet_ptr, packet, dns_packet->header.qdcount,
                     dns_packet->questions);
     }
 
     if (dns_packet->header.ancount) {
-        dns_packet->answers = malloc(sizeof(struct resource_record));
         packet_ptr = read_records(packet_ptr, packet, dns_packet->header.ancount,
                     dns_packet->answers);
     }
 
     if (dns_packet->header.nscount) {
-        dns_packet->authorities = malloc(sizeof(struct resource_record));
         packet_ptr = read_records(packet_ptr, packet, dns_packet->header.nscount,
                     dns_packet->authorities);
     }
 
     if (dns_packet->header.arcount) {
-        dns_packet->additional = malloc(sizeof(struct resource_record));
         packet_ptr = read_records(packet_ptr, packet, dns_packet->header.arcount,
                     dns_packet->additional);
     }
@@ -363,5 +411,149 @@ int write_packet(char packet[], const struct dns_packet *dns_packet) {
         packet_ptr = write_record(packet_ptr, dns_packet->header.arcount, 
                 dns_packet->additional);
     }
-    return packet_ptr - packet - 1;
+    return packet_ptr - packet;
+}
+
+void free_dns_packet(struct dns_packet *dns_packet) {
+    struct dns_header header = dns_packet->header;
+
+    struct resource_record *record;
+    struct resource_record *old_record;
+
+    record = dns_packet->questions;
+
+    while (record) {
+        old_record = record;
+        record = record->next;
+        free(old_record);
+    }
+
+    record = dns_packet->answers;
+    while (record) {
+        old_record = record;
+        record = record->next;
+        free(old_record);
+    }
+
+    record = dns_packet->authorities;
+    while (record) {
+        old_record = record;
+        record = record->next;
+        free(old_record);
+    }
+
+    record = dns_packet->additional;
+    while (record) {
+        old_record = record;
+        record = record->next;
+        free(old_record);
+    }
+}
+
+void process_query() {
+    struct dns_packet dns_packet;
+
+    unsigned char query_buff[512];
+
+    struct sockaddr_storage client_address; // Create a storage for client address
+    socklen_t client_len = sizeof(client_address);
+
+    int bytes_recieved = recvfrom(server_socket, query_buff, sizeof(query_buff), 0,
+                (struct sockaddr *)&client_address, &client_len);
+
+    if (bytes_recieved > 0) {
+        read_packet(query_buff, &dns_packet);
+    }
+    else {
+        return;
+    }
+    char client_address_buff[40]; // So that both IPv4 and IPv6 address could fit 
+    char port[5];
+
+    getnameinfo((struct sockaddr *)&client_address, client_len, 
+                client_address_buff, sizeof(client_address_buff), 
+                port, sizeof(port), NI_NUMERICSERV);
+
+    printf("Got query from %s:%s\n", client_address_buff, port);
+
+    LinkedList *head = ht_search(ht, dns_packet.questions->domain); // Can serve only one Question, 
+                                                                    // so read only first of them
+    int answer_count = 0;
+    while (head) {
+        answer_count++;
+        dns_packet.answers = malloc(sizeof(struct resource_record));
+        
+        printf("Sent %s answers\n", dns_packet.questions->domain);
+
+        strcpy(dns_packet.answers->domain, dns_packet.questions->domain);
+        dns_packet.answers->rtype = A;
+        dns_packet.answers->rclass = IN;
+        dns_packet.answers->ttl = 60;
+        dns_packet.answers->rdlen = 4;
+
+        dns_packet.answers->data = malloc(sizeof(struct in_addr));
+        strcpy(dns_packet.answers->data, head->item->value);
+
+        head = head->next;
+    }
+
+    dns_packet.header.ancount = answer_count;
+
+    if (dns_packet.header.opcode != 0) {
+        printf("Can only serve standard queries\n");
+        return;
+    }
+
+    dns_packet.header.qr = 1; // Response
+    dns_packet.header.ra = 0; // No recursion
+
+    if (!answer_count) {
+        dns_packet.header.rcode = NAME_ERROR; // No such domain in hosts
+    }
+    else {
+        dns_packet.header.rcode = NOERROR;    // Ok
+    }
+
+    int packet_size = write_packet(query_buff, &dns_packet);
+
+    sendto(server_socket, query_buff, packet_size, 0, 
+                (struct sockaddr *)&client_address, client_len);
+                
+    printf("Sent %d bytes\n", packet_size);
+
+    free_dns_packet(&dns_packet);
+}
+
+void process_user_command(char command[]) {
+    if (!command) {
+        return;
+    }
+
+    char *token = strtok(command, " ");
+    if (strcmp(token, "host") != 0) {
+        printf("Command is not supported\n");
+        return;     // Do not support commands that don't start with "host"
+    }
+
+    token = strtok(NULL, " \n");
+    if (strcmp(token, "print") == 0) {
+        print_hosts(ht);
+    }
+    else if (strcmp(token, "add") == 0) {
+        char *domain = strtok(NULL, " \n");     // Domain
+        char *ip = strtok(NULL, " \n");         // IP
+        add_host(ht, domain, ip);
+    } 
+    else if (strcmp(token, "delete") == 0) {
+        token = strtok(NULL, " \n");            // Domain
+        delete_host(ht, token);
+    }
+    else if (strcmp(token, "save") == 0) {
+        token = strtok(NULL, " \n");            // File name
+        write_hosts(ht, token);
+    } 
+    else {
+        printf("Command is not supported\n");
+        return;
+    }
 }

@@ -9,45 +9,14 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define CAPACITY 50000 // Size of the Hash Table
+#include "hash_table.h"
 
 unsigned long hash_function(char* str) {
     unsigned long i = 0;
     for (int j=0; str[j]; j++)
         i += str[j];
-    return i % CAPACITY;
+    return i % 1023;
 }
-
-typedef struct Ht_item Ht_item;
-
-// Define the Hash Table Item here
-struct Ht_item {
-    char* key;
-    char* value;
-};
-
-
-typedef struct LinkedList LinkedList;
-
-// Define the Linkedlist here
-struct LinkedList {
-    Ht_item* item; 
-    LinkedList* next;
-};
-
-
-typedef struct HashTable HashTable;
-
-// Define the Hash Table here
-struct HashTable {
-    // Contains an array of pointers
-    // to items
-    Ht_item** items;
-    LinkedList** overflow_buckets;
-    int size;
-    int count;
-};
-
 
 static LinkedList* allocate_list () {
     // Allocates memory for a Linkedlist pointer
@@ -177,7 +146,6 @@ void free_hashtable(HashTable* table) {
             free_item(item);
     }
 
-    free_overflow_buckets(table);
     free(table->items);
     free(table);
 }
@@ -224,34 +192,32 @@ void ht_insert(HashTable* table, char* key, char* value) {
     }
 
     else {
-            // Scenario 1: We only need to update value
-            if (strcmp(current_item->key, key) == 0) {
-                free(table->items[index]->value);
-                table->items[index]->value = (char*) calloc (strlen(value) + 1, sizeof(char));
-                strcpy(table->items[index]->value, value);
-                free_item(item);
-                return;
-            }
-    
-        else {
             // Scenario 2: Collision
-            handle_collision(table, index, item);
-            return;
-        }
+        handle_collision(table, index, item);
+        return;
     }
 }
 
-char* ht_search(HashTable* table, char* key) {
+LinkedList* ht_search(HashTable* table, char* key) {
     // Searches the key in the hashtable
     // and returns NULL if it doesn't exist
     int index = hash_function(key);
     Ht_item* item = table->items[index];
     LinkedList* head = table->overflow_buckets[index];
+    LinkedList* list = head;
 
     // Ensure that we move to items which are not NULL
     while (item != NULL) {
-        if (strcmp(item->key, key) == 0)
-            return item->value;
+        if (head != NULL) {
+            while (list != NULL) list = list->next;
+            list = linkedlist_insert(head, item);
+            return head;
+        }
+        if (strcmp(item->key, key) == 0) {
+            LinkedList *head = allocate_list();
+            head->item = item;
+            return head;
+        }
         if (head == NULL)
             return NULL;
         item = head->item;
@@ -267,7 +233,7 @@ void ht_delete(HashTable* table, char* key) {
     LinkedList* head = table->overflow_buckets[index];
 
     if (item == NULL) {
-        // Does not exist. Return
+        printf("No such item %s\n", key);
         return;
     }
     else {
@@ -325,51 +291,47 @@ void ht_delete(HashTable* table, char* key) {
 }
 
 void print_search(HashTable* table, char* key) {
-    char* val;
-    if ((val = ht_search(table, key)) == NULL) {
+    LinkedList *head;
+    if ((head = ht_search(table, key)) == NULL) {
         printf("%s does not exist\n", key);
         return;
     }
     else {
-        printf("Key:%s, Value:%s\n", key, val);
+        while (head != NULL) {
+            printf("%s\t\t%s", key, head->item->value);
+            head = head->next;
+        }
     }
 }
 
 void print_hashtable(HashTable* table) {
-    printf("\n-------------------\n");
     for (int i=0; i<table->size; i++) {
         if (table->items[i]) {
-            printf("Index:%d, Key:%s, Value:%s", i, table->items[i]->key, table->items[i]->value);
+            printf("%s\t\t%s", table->items[i]->key, table->items[i]->value);
             if (table->overflow_buckets[i]) {
-                printf(" => Overflow Bucket => ");
+                // printf(" => Overflow Bucket => ");
                 LinkedList* head = table->overflow_buckets[i];
                 while (head) {
-                    printf("Key:%s, Value:%s ", head->item->key, head->item->value);
+                    printf("%s\t\t%s", head->item->key, head->item->value);
                     head = head->next;
                 }
             }
             printf("\n");
         }
     }
-    printf("-------------------\n");
 }
 
-
+#ifdef HT_DEBUG
 int main() {
-    HashTable* ht = create_table(CAPACITY);
-    ht_insert(ht, "1", "First address");
-    ht_insert(ht, "2", "Second address");
-    ht_insert(ht, "Hel", "Third address");
-    ht_insert(ht, "Cau", "Fourth address");
+    HashTable* ht = create_table(1023);
+    ht_insert(ht, "Cau", "Third address\n");
+    ht_insert(ht, "Cau", "Fourth address\n");
     print_search(ht, "1");
     print_search(ht, "2");
     print_search(ht, "3");
-    print_search(ht, "Hel");
-    print_search(ht, "Cau"); // Collision!
-    print_hashtable(ht);
-    ht_delete(ht, "1");
-    ht_delete(ht, "Cau");
+    print_search(ht, "Cau");
     print_hashtable(ht);
     free_hashtable(ht);
     return 0;
 }
+#endif
