@@ -90,7 +90,7 @@ char * write_qname(unsigned char *packet_ptr, const char *domain);
 char * write_questions(char packet[], int qdcount, const struct resource_record *questions);
 
 /* Write resource record info into bytes array */
-char * write_record(char packet[], int rcount, const struct resource_record *records);
+char * write_records(char packet[], int rcount, const struct resource_record *records);
 
 /* Write IPv4 address in binary format into bytes array */
 char * write_ipv4(unsigned char *packet_ptr, unsigned char address[]);

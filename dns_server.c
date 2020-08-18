@@ -78,7 +78,7 @@ int main(int argc, char *argv[]) {
     }
     freeaddrinfo(bind_addr);
 
-    printf("Server is started, waiting for connections\n");
+    printf("Server is started, waiting for packets\n");
 
     char command[30];       // Buffer for user commands
 
@@ -358,7 +358,7 @@ char * write_questions(char packet[], int qdcount, const struct resource_record 
     return packet_ptr;
 }
 
-char * write_record(char packet[], int rcount, const struct resource_record *records) {
+char * write_records(char packet[], int rcount, const struct resource_record *records) {
     char *packet_ptr = packet;
 
     for (int i = 0; i < rcount; i++) {
@@ -398,17 +398,17 @@ int write_packet(char packet[], const struct dns_packet *dns_packet) {
     }
 
     if (dns_packet->header.ancount) {
-        packet_ptr = write_record(packet_ptr, dns_packet->header.ancount, 
+        packet_ptr = write_records(packet_ptr, dns_packet->header.ancount, 
                 dns_packet->answers);
     }
 
     if (dns_packet->header.nscount) {
-        packet_ptr = write_record(packet_ptr, dns_packet->header.nscount, 
+        packet_ptr = write_records(packet_ptr, dns_packet->header.nscount, 
                 dns_packet->authorities);
     }
 
     if (dns_packet->header.arcount) {
-        packet_ptr = write_record(packet_ptr, dns_packet->header.arcount, 
+        packet_ptr = write_records(packet_ptr, dns_packet->header.arcount, 
                 dns_packet->additional);
     }
     return packet_ptr - packet;
@@ -421,29 +421,28 @@ void free_dns_packet(struct dns_packet *dns_packet) {
     struct resource_record *old_record;
 
     record = dns_packet->questions;
-
-    while (record) {
+    for (int i = 0; i < header.qdcount; i++) {
         old_record = record;
         record = record->next;
         free(old_record);
     }
 
     record = dns_packet->answers;
-    while (record) {
+    for (int i = 0; i < header.ancount; i++) {
         old_record = record;
         record = record->next;
         free(old_record);
     }
 
     record = dns_packet->authorities;
-    while (record) {
+    for (int i = 0; i < header.nscount; i++) {
         old_record = record;
         record = record->next;
         free(old_record);
     }
 
     record = dns_packet->additional;
-    while (record) {
+    for (int i = 0; i < header.arcount; i++) {
         old_record = record;
         record = record->next;
         free(old_record);
@@ -478,13 +477,14 @@ void process_query() {
 
     LinkedList *head = ht_search(ht, dns_packet.questions->domain); // Can serve only one Question, 
                                                                     // so read only first of them
+    
+    dns_packet.answers = malloc(sizeof(struct resource_record));
+    struct resource_record *first_answer = dns_packet.answers;
+
     int answer_count = 0;
     while (head) {
         answer_count++;
-        dns_packet.answers = malloc(sizeof(struct resource_record));
         
-        printf("Sent %s answers\n", dns_packet.questions->domain);
-
         strcpy(dns_packet.answers->domain, dns_packet.questions->domain);
         dns_packet.answers->rtype = A;
         dns_packet.answers->rclass = IN;
@@ -495,7 +495,12 @@ void process_query() {
         strcpy(dns_packet.answers->data, head->item->value);
 
         head = head->next;
+        if (head) {
+            dns_packet.answers->next = malloc(sizeof(struct resource_record));
+            dns_packet.answers = dns_packet.answers->next;
+        }
     }
+    dns_packet.answers = first_answer;
 
     dns_packet.header.ancount = answer_count;
 
@@ -519,7 +524,7 @@ void process_query() {
     sendto(server_socket, query_buff, packet_size, 0, 
                 (struct sockaddr *)&client_address, client_len);
                 
-    printf("Sent %d bytes\n", packet_size);
+    printf("Sent %d bytes for domain %s\n", packet_size, dns_packet.questions->domain);
 
     free_dns_packet(&dns_packet);
 }
@@ -542,14 +547,29 @@ void process_user_command(char command[]) {
     else if (strcmp(token, "add") == 0) {
         char *domain = strtok(NULL, " \n");     // Domain
         char *ip = strtok(NULL, " \n");         // IP
+        
+        if (!domain || !ip) {
+            printf("Wrong syntax\n");
+            return;
+        }
         add_host(ht, domain, ip);
     } 
     else if (strcmp(token, "delete") == 0) {
         token = strtok(NULL, " \n");            // Domain
+
+        if (!token) {
+            printf("Wrong syntax\n");
+            return;
+        }
         delete_host(ht, token);
     }
     else if (strcmp(token, "save") == 0) {
         token = strtok(NULL, " \n");            // File name
+        
+        if (!token) {
+            printf("Wrong syntax\n");
+            return;
+        }
         write_hosts(ht, token);
     } 
     else {

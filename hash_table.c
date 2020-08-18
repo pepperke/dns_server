@@ -307,16 +307,15 @@ void print_search(HashTable* table, char* key) {
 void print_hashtable(HashTable* table) {
     for (int i=0; i<table->size; i++) {
         if (table->items[i]) {
-            printf("%s\t\t%s", table->items[i]->key, table->items[i]->value);
+            printf("%s\t\t%s\n", table->items[i]->key, table->items[i]->value);
             if (table->overflow_buckets[i]) {
                 // printf(" => Overflow Bucket => ");
                 LinkedList* head = table->overflow_buckets[i];
                 while (head) {
-                    printf("%s\t\t%s", head->item->key, head->item->value);
+                    printf("%s\t\t%s\n", head->item->key, head->item->value);
                     head = head->next;
                 }
             }
-            printf("\n");
         }
     }
 }
