@@ -16,7 +16,7 @@ After build you can launch <code>dns_server</code> with
 ./dns_server [filename]
 </pre>
 
-with an optional file name which contains hostname information. If not specified, file <code>hosts</code> is read by default.
+with an optional file name which contains hostname information. If not specified, file <code>hosts</code> is read by default. Domains can contain multiple IPs.
 
 During server work, you can modify hosts table which is contained in memory by using:
 
