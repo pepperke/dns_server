@@ -204,17 +204,20 @@ LinkedList* ht_search(HashTable* table, char* key) {
     int index = hash_function(key);
     Ht_item* item = table->items[index];
     LinkedList* head = table->overflow_buckets[index];
-    LinkedList* list = head;
+
+    LinkedList* list = linkedlist_insert(NULL, item);
 
     // Ensure that we move to items which are not NULL
     while (item != NULL) {
         if (head != NULL) {
-            while (list != NULL) list = list->next;
-            list = linkedlist_insert(head, item);
-            return head;
+            while (head != NULL) {
+                list = linkedlist_insert(list, head->item);
+                head = head->next;
+            }
+            return list;
         }
         if (strcmp(item->key, key) == 0) {
-            LinkedList *head = allocate_list();
+            head = allocate_list();
             head->item = item;
             return head;
         }
@@ -320,15 +323,24 @@ void print_hashtable(HashTable* table) {
     }
 }
 
+
 #ifdef HT_DEBUG
 int main() {
     HashTable* ht = create_table(1023);
     ht_insert(ht, "Cau", "Third address\n");
+    ht_insert(ht, "Cau", "second address\n");
     ht_insert(ht, "Cau", "Fourth address\n");
-    print_search(ht, "1");
-    print_search(ht, "2");
-    print_search(ht, "3");
     print_search(ht, "Cau");
+    print_search(ht, "Cau");
+    print_search(ht, "Cau");
+
+    printf("--------\n");
+    LinkedList *head = ht_search(ht, "Cau"); 
+    while (head) {
+        printf("%s\n", head->item->value);
+        head = head->next;
+    }
+
     print_hashtable(ht);
     free_hashtable(ht);
     return 0;
