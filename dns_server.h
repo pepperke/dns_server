@@ -103,3 +103,9 @@ void process_query();
 
 /* Process command that user entered from terminal */
 void process_user_command(char command[]);
+
+int is_valid_ip_part(char part[]);
+
+int is_valid_ip(char ip[]);
+
+int is_valid_domain(char domain[]);

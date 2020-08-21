@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <signal.h>
+#include <regex.h>
 
 #include "dns_server.h"
 #include "dns_hosts.h"
@@ -80,7 +81,7 @@ int main(int argc, char *argv[]) {
 
     printf("Server is started, waiting for packets\n");
 
-    char command[30];       // Buffer for user commands
+    char command[300]; // Buffer for user commands
 
     struct timeval timeout;
     timeout.tv_sec = 0;
@@ -533,7 +534,14 @@ void process_user_command(char command[]) {
     if (!command) {
         return;
     }
-
+    // 10 for command itself (+spaces), 255 for URL (by RFC), 15 for IP)
+    if (strlen(command) > 10 + 255 + 15) {
+        printf("Too long command\n");
+        // Clear stdin in case command was too long to fit in one call to fgets
+        fgets(command, strlen(command), stdin); 
+        return;
+    }
+                                         
     char *token = strtok(command, " ");
     if (strcmp(token, "host") != 0) {
         printf("Command is not supported\n");
@@ -548,10 +556,15 @@ void process_user_command(char command[]) {
         char *domain = strtok(NULL, " \n");     // Domain
         char *ip = strtok(NULL, " \n");         // IP
         
-        if (!domain || !ip) {
-            printf("Wrong syntax\n");
+        if (!is_valid_domain(domain)) {
+            printf("Wrong domain format\n");
             return;
         }
+        if (!is_valid_ip(ip)) {
+            printf("Wrong ip format\n");
+            return;
+        }
+
         add_host(ht, domain, ip);
     } 
     else if (strcmp(token, "delete") == 0) {
@@ -576,4 +589,98 @@ void process_user_command(char command[]) {
         printf("Command is not supported\n");
         return;
     }
+}
+
+int is_valid_ip_part(char part[]) {
+    int n = strlen(part); 
+
+    if (n > 3) 
+        return 0; 
+
+    for (int i = 0; i < n; i++) {
+        if ((part[i] >= '0' && part[i] <= '9') == 0) {
+            return 0;
+        }
+    }
+
+    int x = atoi(part); 
+    return (x >= 0 && x <= 255); 
+}
+
+int is_valid_ip(char ip[]) {
+    if (!ip) {
+        return 0; 
+    } 
+    int i, num, dots = 0; 
+    int len = strlen(ip); 
+    int count = 0; 
+
+    for (int i = 0; i < len; i++) {
+        if (ip[i] == '.') {
+            count++; 
+        }
+    }
+
+    if (count != 3) {
+        return 0; 
+    }
+
+    char *ip_copy = (char *)malloc(strlen(ip));
+    strcpy(ip_copy, ip); // Save original ip as strtok destructs it
+
+    char *part = strtok(ip_copy, "."); 
+    if (!part) 
+        return 0; 
+  
+    while (part) { 
+        if (is_valid_ip_part(part)) { 
+            part = strtok(NULL, "."); 
+            if (part) {
+                dots++; 
+            }
+        }
+        else {
+            return 0; 
+        }
+    }
+  
+    /* valid IP string must contain 3 dots */
+    // this is for the cases such as 1...1 where originally the 
+    // no. of dots is three but after iteration of the string we find it is not valid 
+    if (dots != 3) {
+        return 0; 
+    }
+    free(ip_copy);
+    return 1;
+} 
+
+int is_valid_domain(char domain[]) {
+    int n = strlen(domain);
+
+    if (n == 0 || n > 255) {
+        return 0;
+    }
+
+    if (domain[n - 1] == '.') {
+        return 0;
+    }
+    char parts_num = 0;
+
+    char *domain_copy = (char *)malloc(strlen(domain));
+    strcpy(domain_copy, domain); // Save original domain as strtok destructs it
+    char *part = strtok(domain_copy, ".");
+
+    while (part) {
+        n = strlen(part);
+        for (int i = 0; i < n; i++) {
+            if (((part[i] >= '0' && part[i] <= '9') ||
+                 (part[i] >= 'a' && part[i] <= 'z')) == 0) {
+                return 0;
+            }
+        }
+        part = strtok(NULL, ".");
+        parts_num++;
+    }
+    free(domain_copy);
+    return parts_num > 1;
 }
