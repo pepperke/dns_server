@@ -14,3 +14,9 @@ void delete_host(HashTable *ht, char domain[]);
 
 /* Save hosts table from memory into file */
 void write_hosts(HashTable *ht, char filename[]);
+
+int is_valid_ip_part(char part[]);
+
+int is_valid_ip(char ip[]);
+
+int is_valid_domain(char domain[]);

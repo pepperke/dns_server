@@ -15,6 +15,8 @@
 #include "dns_hosts.h"
 #include "hash_table.h"
 
+#define PACKET_SIZE 512
+
 // Global variables to be able to clear them correctly 
 // after receiving Ctrl-C
 HashTable *ht;
@@ -452,7 +454,7 @@ void free_dns_packet(struct dns_packet *dns_packet) {
 void process_query() {
     struct dns_packet dns_packet;
 
-    unsigned char query_buff[512];
+    unsigned char query_buff[PACKET_SIZE];
 
     struct sockaddr_storage client_address; // Create a storage for client address
     socklen_t client_len = sizeof(client_address);
@@ -461,6 +463,10 @@ void process_query() {
                 (struct sockaddr *)&client_address, &client_len);
 
     if (bytes_recieved > 0) {
+        if (bytes_recieved > PACKET_SIZE) {
+            printf("The query is too long\n");
+            return;
+        }
         read_packet(query_buff, &dns_packet);
     }
     else {
@@ -590,96 +596,3 @@ void process_user_command(char command[]) {
     }
 }
 
-int is_valid_ip_part(char part[]) {
-    int n = strlen(part); 
-
-    if (n > 3) 
-        return 0; 
-
-    for (int i = 0; i < n; i++) {
-        if ((part[i] >= '0' && part[i] <= '9') == 0) {
-            return 0;
-        }
-    }
-
-    int x = atoi(part); 
-    return (x >= 0 && x <= 255); 
-}
-
-int is_valid_ip(char ip[]) {
-    if (!ip) {
-        return 0; 
-    } 
-    int i, num, dots = 0; 
-    int len = strlen(ip); 
-    int count = 0; 
-
-    for (int i = 0; i < len; i++) {
-        if (ip[i] == '.') {
-            count++; 
-        }
-    }
-
-    if (count != 3) {
-        return 0; 
-    }
-
-    char *ip_copy = (char *)malloc(strlen(ip));
-    strcpy(ip_copy, ip); // Save original ip as strtok destructs it
-
-    char *part = strtok(ip_copy, "."); 
-    if (!part) 
-        return 0; 
-  
-    while (part) { 
-        if (is_valid_ip_part(part)) { 
-            part = strtok(NULL, "."); 
-            if (part) {
-                dots++; 
-            }
-        }
-        else {
-            return 0; 
-        }
-    }
-  
-    /* valid IP string must contain 3 dots */
-    // this is for the cases such as 1...1 where originally the 
-    // no. of dots is three but after iteration of the string we find it is not valid 
-    if (dots != 3) {
-        return 0; 
-    }
-    free(ip_copy);
-    return 1;
-} 
-
-int is_valid_domain(char domain[]) {
-    int n = strlen(domain);
-
-    if (n == 0 || n > 255) {
-        return 0;
-    }
-
-    if (domain[n - 1] == '.') {
-        return 0;
-    }
-    char parts_num = 0;
-
-    char *domain_copy = (char *)malloc(strlen(domain));
-    strcpy(domain_copy, domain); // Save original domain as strtok destructs it
-    char *part = strtok(domain_copy, ".");
-
-    while (part) {
-        n = strlen(part);
-        for (int i = 0; i < n; i++) {
-            if (((part[i] >= '0' && part[i] <= '9') ||
-                 (part[i] >= 'a' && part[i] <= 'z')) == 0) {
-                return 0;
-            }
-        }
-        part = strtok(NULL, ".");
-        parts_num++;
-    }
-    free(domain_copy);
-    return parts_num > 1;
-}
