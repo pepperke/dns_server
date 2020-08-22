@@ -10,7 +10,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <signal.h>
-#include <regex.h>
 
 #include "dns_server.h"
 #include "dns_hosts.h"
