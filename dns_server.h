@@ -78,19 +78,21 @@ const char * read_records(const char packet_ptr[], const char packet_start[],
 void read_ipv4(const unsigned char packet_ptr[], unsigned char *address);
 
 /* Translate dns_packet structure into bytes array */
-int  write_packet(char packet[], const struct dns_packet *dns_packet);
+int  write_packet(char packet[], struct dns_packet *dns_packet);
 
 /* Write header into bytes array */
 char * write_header(char packet[], const struct dns_packet *dns_packet);
 
 /* Split domain on labels and write them into Query section of bytes array */
-char * write_qname(unsigned char *packet_ptr, const char *domain);
+char * write_qname(unsigned char *packet_ptr, const char *domain, int *space_left);
 
 /* Write questions into bytes array */
-char * write_questions(char packet[], int qdcount, const struct resource_record *questions);
+char * write_questions(char packet[], int qdcount, const struct resource_record *questions,
+            int *space_left);
 
 /* Write resource record info into bytes array */
-char * write_records(char packet[], int rcount, const struct resource_record *records);
+char * write_records(char packet[], int rcount, const struct resource_record *records,
+            int *space_left);
 
 /* Write IPv4 address in binary format into bytes array */
 char * write_ipv4(unsigned char *packet_ptr, unsigned char address[]);

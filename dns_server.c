@@ -16,6 +16,7 @@
 #include "hash_table.h"
 
 #define PACKET_SIZE 512
+#define HEADER_SIZE 12
 
 // Global variables to be able to clear them correctly 
 // after receiving Ctrl-C
@@ -292,24 +293,42 @@ char * write_ipv4(unsigned char *packet_ptr, unsigned char address[]) {
     return packet_ptr;
 }
 
-char * write_qname(unsigned char *packet_ptr, const char *domain) {
+char * write_qname(unsigned char *packet_ptr, const char *domain, int *space_left) {
     unsigned char *len;
+    unsigned char *tmp_buffer = (unsigned char *)malloc(512);
+    int buff_len = 0;
 
     while (*domain) {
-        len = packet_ptr++;
+        len = tmp_buffer++;
+        buff_len++;
+
         while (*domain != '.' && *domain) {
-            *packet_ptr++ = *domain++;
+            *tmp_buffer++ = *domain++;
+            buff_len++;
         }
-        *len = packet_ptr - len - 1;
+        *len = tmp_buffer - len - 1;
 
         if (*domain) {
-            domain++;  
+            domain++;
         } else {
             break;
         }
     }
-    *packet_ptr++ = 0;
-    return packet_ptr;
+    *tmp_buffer = 0;
+    tmp_buffer -= buff_len; // Return to the beginning of a qname
+    buff_len++;
+
+    if (buff_len > *space_left) {
+        free(tmp_buffer);
+        *packet_ptr = -1;
+        return packet_ptr;
+    }
+    else {
+        memcpy(packet_ptr, tmp_buffer, buff_len);
+        *space_left = *space_left - buff_len;
+        free(tmp_buffer);
+        return packet_ptr + buff_len;
+    }
 }
 
 char * write_header(char packet[], const struct dns_packet *dns_packet) {
@@ -343,16 +362,27 @@ char * write_header(char packet[], const struct dns_packet *dns_packet) {
     return packet_ptr;
 }
 
-char * write_questions(char packet[], int qdcount, const struct resource_record *questions) {
+char * write_questions(char packet[], int qdcount, const struct resource_record *questions,
+            int *space_left) {
     char *packet_ptr = packet;
 
+    int bytes_to_write = 0;
+
     for (int i = 0; i < qdcount; i++) {
-        packet_ptr = write_qname(packet_ptr, questions->domain);
+        packet_ptr = write_qname(packet_ptr, questions->domain, space_left);
+
+        if (*packet_ptr < 0 || *space_left < 4) {
+            *packet_ptr = -1;
+            return packet_ptr;
+        }
+
         *packet_ptr++ = questions->rtype >> 8;
         *packet_ptr++ = questions->rtype & 0xFF;
 
         *packet_ptr++ = questions->rclass >> 8;
         *packet_ptr++ = questions->rclass & 0xFF;
+
+        *space_left -= 4;
 
         if (questions->next)
             questions = questions->next;
@@ -360,11 +390,21 @@ char * write_questions(char packet[], int qdcount, const struct resource_record 
     return packet_ptr;
 }
 
-char * write_records(char packet[], int rcount, const struct resource_record *records) {
+char * write_records(char packet[], int rcount, const struct resource_record *records,
+            int *space_left) {
     char *packet_ptr = packet;
 
     for (int i = 0; i < rcount; i++) {
-        packet_ptr = write_qname(packet_ptr, records->domain);
+        packet_ptr = write_qname(packet_ptr, records->domain, space_left);
+
+        // RTYPE+RCLASS + TTL + RDLEN + DATA
+        char need = 2 + 2 + 4 + 2 + records->rdlen;
+                                
+        if (*packet_ptr < 0 || *space_left < need) { 
+            *packet_ptr = -1;
+            return packet_ptr;
+        }
+
         *packet_ptr++ = records->rtype >> 8;
         *packet_ptr++ = records->rtype & 0xFF;
 
@@ -372,12 +412,14 @@ char * write_records(char packet[], int rcount, const struct resource_record *re
         *packet_ptr++ = records->rclass & 0xFF;
 
         *packet_ptr++ = records->ttl >> 24;
-        *packet_ptr++ = records->ttl >> 16;       
-        *packet_ptr++ = records->ttl >> 8;       
-        *packet_ptr++ = records->ttl & 0xFF;       
+        *packet_ptr++ = records->ttl >> 16;
+        *packet_ptr++ = records->ttl >> 8;
+        *packet_ptr++ = records->ttl & 0xFF;
 
         *packet_ptr++ = records->rdlen >> 8;
         *packet_ptr++ = records->rdlen & 0xFF;
+
+        *space_left -= need;
 
         if (records->rtype == A) {
             packet_ptr = write_ipv4(packet_ptr, records->data);
@@ -389,31 +431,57 @@ char * write_records(char packet[], int rcount, const struct resource_record *re
     return packet_ptr;
 }
 
-int write_packet(char packet[], const struct dns_packet *dns_packet) {
+int write_packet(char packet[], struct dns_packet *dns_packet) {
     char *packet_ptr = packet;
+    int space_left = PACKET_SIZE;
 
     packet_ptr = write_header(packet_ptr, dns_packet);
+    space_left -= HEADER_SIZE;
 
     if (dns_packet->header.qdcount) {
         packet_ptr = write_questions(packet_ptr, dns_packet->header.qdcount, 
-                dns_packet->questions);
+                dns_packet->questions, &space_left);
+                
+        if (*packet_ptr < 0) {
+            dns_packet->header.tc = 1;
+            write_header(packet, dns_packet);
+            return PACKET_SIZE - space_left;
+        }
     }
 
     if (dns_packet->header.ancount) {
         packet_ptr = write_records(packet_ptr, dns_packet->header.ancount, 
-                dns_packet->answers);
+                dns_packet->answers, &space_left);
+
+        if (*packet_ptr < 0) {
+            dns_packet->header.tc = 1;
+            write_header(packet, dns_packet);
+            return PACKET_SIZE - space_left;
+        }
     }
 
     if (dns_packet->header.nscount) {
         packet_ptr = write_records(packet_ptr, dns_packet->header.nscount, 
-                dns_packet->authorities);
+                dns_packet->authorities, &space_left);
+                
+        if (*packet_ptr < 0) {
+            dns_packet->header.tc = 1;
+            write_header(packet, dns_packet);
+            return PACKET_SIZE - space_left;
+        }
     }
 
     if (dns_packet->header.arcount) {
         packet_ptr = write_records(packet_ptr, dns_packet->header.arcount, 
-                dns_packet->additional);
+                dns_packet->additional, &space_left);
+
+        if (*packet_ptr < 0) {
+            dns_packet->header.tc = 1;
+            write_header(packet, dns_packet);
+            return PACKET_SIZE - space_left;
+        }
     }
-    return packet_ptr - packet;
+    return PACKET_SIZE - space_left;
 }
 
 void free_dns_packet(struct dns_packet *dns_packet) {
@@ -455,6 +523,7 @@ void process_query() {
     struct dns_packet dns_packet;
 
     unsigned char query_buff[PACKET_SIZE];
+    memset(query_buff, 0, sizeof(query_buff));
 
     struct sockaddr_storage client_address; // Create a storage for client address
     socklen_t client_len = sizeof(client_address);
@@ -527,6 +596,10 @@ void process_query() {
 
     int packet_size = write_packet(query_buff, &dns_packet);
 
+    if (dns_packet.header.tc == 1) {
+        printf("Anwer query is too long, truncating\n");
+    }
+
     sendto(server_socket, query_buff, packet_size, 0, 
                 (struct sockaddr *)&client_address, client_len);
                 
@@ -595,4 +668,3 @@ void process_user_command(char command[]) {
         return;
     }
 }
-
