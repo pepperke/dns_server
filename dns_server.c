@@ -17,6 +17,7 @@
 
 #define PACKET_SIZE 512
 #define HEADER_SIZE 12
+#define IPV4_LEN 16
 
 // Global variables to be able to clear them correctly 
 // after receiving Ctrl-C
@@ -112,7 +113,7 @@ int main(int argc, char *argv[]) {
 }
 
 void read_ipv4(const unsigned char packet_ptr[], unsigned char *address) {
-    sprintf(address, "%u.%u.%u.%u", packet_ptr[0], packet_ptr[1], 
+    snprintf(address, IPV4_LEN, "%u.%u.%u.%u", packet_ptr[0], packet_ptr[1], 
             packet_ptr[2], packet_ptr[3]);
 }
 
@@ -236,7 +237,7 @@ const char * read_records(const char packet_ptr[], const char packet_start[],
         packet_ptr += 2;
 
         if (records->rtype == A) {
-            records->data = malloc(sizeof(struct in_addr));
+            records->data = malloc(IPV4_LEN);
             read_ipv4(packet_ptr, records->data);
             packet_ptr += 4;
         }
